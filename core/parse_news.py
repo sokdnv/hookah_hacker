@@ -74,7 +74,7 @@ async def main():
     news_list = df['Ссылка ТГ'].to_list()
     news_list = [source for source in news_list if isinstance(source, str) and source.startswith('https://t.me/')]
 
-    session_name = f'session_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
+    session_name = f'session_name'
 
     # Создание клиента Telegram
     client = TelegramClient(session_name, api_id, api_hash)
