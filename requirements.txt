@@ -1,0 +1,7 @@
+openai==1.64.0
+pandas==2.2.3
+python-dotenv==1.0.1
+pytz==2024.1
+Requests==2.32.3
+Telethon==1.39.0
+tqdm==4.66.4

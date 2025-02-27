@@ -6,6 +6,7 @@ import pandas as pd
 from telethon import TelegramClient, sync
 from datetime import datetime, timedelta
 import asyncio
+import random
 import re
 
 from utils import config, logger, BASE_DIR
@@ -28,6 +29,7 @@ def extract_channel_name(url):
 # Функция для получения последних сообщений канала
 async def get_last_day_messages(client, channel_name):
     channel = await client.get_entity(channel_name)
+    await asyncio.sleep(random.uniform(1, 2))
 
     # Определяем время один день назад c учетом часового пояса (aware datetime)
     # Используем tzlocal для получения локального часового пояса
@@ -72,8 +74,10 @@ async def main():
     news_list = df['Ссылка ТГ'].to_list()
     news_list = [source for source in news_list if isinstance(source, str) and source.startswith('https://t.me/')]
 
+    session_name = f'session_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
+
     # Создание клиента Telegram
-    client = TelegramClient('session_name', api_id, api_hash)
+    client = TelegramClient(session_name, api_id, api_hash)
 
     # Подавление предупреждений getpass путем использования обычного ввода
     import sys
