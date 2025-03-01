@@ -4,13 +4,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pandas as pd
-from telethon import TelegramClient, sync
+from telethon import TelegramClient
 from datetime import datetime, timedelta
 import asyncio
 import random
 import re
 import os
-import time
+
 
 from utils import config, logger, BASE_DIR
 
@@ -56,7 +56,6 @@ async def get_last_day_messages(client, channel_name):
 
         # Добавляем случайную задержку между запросами (более естественная)
         delay = random.uniform(3, 7)  # Увеличенная задержка
-        logger.info(f"Ожидание {delay:.2f} секунд перед запросом канала {channel_name}")
         await asyncio.sleep(delay)
 
         # Определяем время один день назад
@@ -102,11 +101,8 @@ async def main():
     news_list = df['Ссылка ТГ'].to_list()
     news_list = [source for source in news_list if isinstance(source, str) and source.startswith('https://t.me/')]
 
-    # Ограничиваем количество каналов для одного запуска
-    max_channels_per_run = 20
-    if len(news_list) > max_channels_per_run:
-        logger.info(f"Обрабатываем только {max_channels_per_run} из {len(news_list)} каналов")
-        news_list = random.sample(news_list, max_channels_per_run)
+    # Обрабатываем все каналы
+    logger.info(f"Всего каналов для обработки: {len(news_list)}")
 
     session_name = str(SESSION_FILE)
 
@@ -166,7 +162,6 @@ async def main():
             # Задержка между группами каналов
             if chunk_idx > 0:
                 chunk_delay = random.uniform(30, 60)
-                logger.info(f"Пауза между группами каналов: {chunk_delay:.2f} секунд")
                 await asyncio.sleep(chunk_delay)
 
             logger.info(f"Обработка группы каналов {chunk_idx + 1}/{len(channel_chunks)}")
