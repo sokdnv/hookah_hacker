@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pandas as pd
@@ -8,14 +9,36 @@ from datetime import datetime, timedelta
 import asyncio
 import random
 import re
+import os
+import time
 
 from utils import config, logger, BASE_DIR
-
 
 # Конфигурация клиента Telegram
 api_id = config['api_id']
 api_hash = config['api_hash']
 phone = config['phone']
+
+# Пути к возможным расположениям файла сессии
+SESSION_FILENAME = 'session_name.session'
+SESSION_PATHS = [
+    BASE_DIR / SESSION_FILENAME,  # В корневой директории проекта
+    Path(__file__).parent / SESSION_FILENAME,  # В директории скрипта
+    Path(SESSION_FILENAME)  # В текущей рабочей директории
+]
+
+
+# Функция для поиска существующего файла сессии
+def find_session_file():
+    for path in SESSION_PATHS:
+        if path.exists():
+            logger.info(f"Найден файл сессии: {path}")
+            return path
+    return None
+
+
+# Путь для сохранения файла сессии (всегда в корневой директории)
+SESSION_FILE = BASE_DIR / SESSION_FILENAME
 
 
 # Функция для извлечения имени канала из URL
@@ -26,45 +49,50 @@ def extract_channel_name(url):
     return url
 
 
-# Функция для получения последних сообщений канала
+# Функция для получения последних сообщений канала с продвинутой задержкой
 async def get_last_day_messages(client, channel_name):
-    channel = await client.get_entity(channel_name)
-    await asyncio.sleep(random.uniform(1, 2))
+    try:
+        channel = await client.get_entity(channel_name)
 
-    # Определяем время один день назад c учетом часового пояса (aware datetime)
-    # Используем tzlocal для получения локального часового пояса
-    import pytz
-    local_tz = pytz.timezone('UTC')  # Telegram использует UTC
+        # Добавляем случайную задержку между запросами (более естественная)
+        delay = random.uniform(3, 7)  # Увеличенная задержка
+        logger.info(f"Ожидание {delay:.2f} секунд перед запросом канала {channel_name}")
+        await asyncio.sleep(delay)
 
-    # Создаем aware datetime объект для текущего времени
-    now = datetime.now(local_tz)
-    one_day_ago = now - timedelta(days=1)
+        # Определяем время один день назад
+        import pytz
+        local_tz = pytz.timezone('UTC')
+        now = datetime.now(local_tz)
+        one_day_ago = now - timedelta(days=1)
 
-    # Получаем историю сообщений
-    messages = []
-    async for message in client.iter_messages(channel, limit=200):  # Увеличиваем лимит до 200
-        # Проверяем, было ли сообщение отправлено в течение последнего дня
-        if message.date >= one_day_ago:
-            # Добавляем сообщение в список
-            if message.text:
-                # Ограничиваем длину сообщения для удобства отображения
-                preview = message.text[:100] + "..." if len(message.text) > 100 else message.text
+        # Получаем историю сообщений с ограниченной скоростью
+        messages = []
+        message_count = 0
+        async for message in client.iter_messages(channel, limit=100):  # Уменьшаем лимит до 100
+            # Добавляем микро-задержки после каждых 10 сообщений
+            message_count += 1
+            if message_count % 10 == 0:
+                await asyncio.sleep(random.uniform(0.5, 1))
 
-                # Создаем структуру с данными о сообщении
-                message_data = {
-                    'text': preview,
-                    'message_id': message.id,
-                    'channel_id': channel.id,
-                    'date': message.date
-                }
+            if message.date >= one_day_ago:
+                if message.text:
+                    preview = message.text[:100] + "..." if len(message.text) > 100 else message.text
+                    message_data = {
+                        'text': preview,
+                        'message_id': message.id,
+                        'channel_id': channel.id,
+                        'date': message.date
+                    }
+                    messages.append(message_data)
+            else:
+                break
 
-                messages.append(message_data)
-        else:
-            # Сообщения отсортированы по времени, поэтому как только мы достигаем
-            # сообщения старше 1 дня, мы можем прекратить поиск
-            break
-
-    return messages
+        return messages
+    except Exception as e:
+        logger.error(f"Ошибка при получении сообщений канала {channel_name}: {e}")
+        # Дополнительная задержка при ошибке, чтобы избежать блокировки
+        await asyncio.sleep(random.uniform(10, 15))
+        return []
 
 
 # Основная функция
@@ -74,67 +102,112 @@ async def main():
     news_list = df['Ссылка ТГ'].to_list()
     news_list = [source for source in news_list if isinstance(source, str) and source.startswith('https://t.me/')]
 
-    session_name = f'session_name'
+    # Ограничиваем количество каналов для одного запуска
+    max_channels_per_run = 20
+    if len(news_list) > max_channels_per_run:
+        logger.info(f"Обрабатываем только {max_channels_per_run} из {len(news_list)} каналов")
+        news_list = random.sample(news_list, max_channels_per_run)
 
-    # Создание клиента Telegram
+    session_name = str(SESSION_FILE)
+
+    # Создание клиента Telegram с явным указанием полного пути к файлу сессии
     client = TelegramClient(session_name, api_id, api_hash)
 
-    # Подавление предупреждений getpass путем использования обычного ввода
-    import sys
+    # Ищем существующий файл сессии в разных директориях
+    session_file = find_session_file()
+    session_exists = session_file is not None
+    logger.info(f"Файл сессии {'найден: ' + str(session_file) if session_exists else 'не найден'}")
+
+    # Если сессия существует, но в другом месте, создаем символическую ссылку или копируем в корневую директорию
+    if session_exists and session_file != SESSION_FILE:
+        try:
+            # Пробуем создать директорию, если её нет
+            os.makedirs(SESSION_FILE.parent, exist_ok=True)
+
+            # Копируем файл сессии в целевую директорию
+            import shutil
+            shutil.copy2(session_file, SESSION_FILE)
+            logger.info(f"Копировали файл сессии из {session_file} в {SESSION_FILE}")
+        except Exception as e:
+            logger.error(f"Ошибка при копировании файла сессии: {e}")
 
     # Определение функции для пользовательского запроса пароля
     async def custom_password_handler():
         logger.info("Пожалуйста, введите код подтверждения или пароль: ")
         return input()
 
-    # Использование пользовательского обработчика для запроса пароля
-    await client.start(phone=phone, password=custom_password_handler)
-    logger.info("Клиент Telegram успешно запущен")
+    try:
+        # Запускаем клиент с сохранением сессии
+        if not session_exists:
+            logger.info("Первый запуск, потребуется авторизация")
+            await client.start(phone=phone, password=custom_password_handler)
+            logger.info("Авторизация успешна, сессия сохранена")
+        else:
+            logger.info("Используем существующую сессию")
+            await client.start(phone=phone)
+            logger.info("Подключение успешно с использованием существующей сессии")
 
-    # Словарь для хранения результатов
-    results = {}
+        # Проверяем, что мы действительно авторизованы
+        if await client.is_user_authorized():
+            logger.info("Пользователь авторизован успешно")
+        else:
+            logger.error("Пользователь не авторизован, требуется ручная авторизация")
+            await client.start(phone=phone, password=custom_password_handler)
 
-    # Обработка каждого канала
-    all_posts = []  # Список для хранения всех постов для CSV
+        # Словарь для хранения результатов
+        results = {}
+        all_posts = []
 
-    for url in news_list:
-        channel_name = extract_channel_name(url)
-        # logger.info(f"Проверка канала: {channel_name}...")
+        # Разбиваем каналы на группы и вводим задержки между группами
+        chunk_size = 5
+        channel_chunks = [news_list[i:i + chunk_size] for i in range(0, len(news_list), chunk_size)]
 
-        try:
-            messages = await get_last_day_messages(client, channel_name)
+        for chunk_idx, chunk in enumerate(channel_chunks):
+            # Задержка между группами каналов
+            if chunk_idx > 0:
+                chunk_delay = random.uniform(30, 60)
+                logger.info(f"Пауза между группами каналов: {chunk_delay:.2f} секунд")
+                await asyncio.sleep(chunk_delay)
 
-            # Форматируем результаты для словаря результатов (только тексты)
-            results[channel_name] = [msg['text'] for msg in messages]
+            logger.info(f"Обработка группы каналов {chunk_idx + 1}/{len(channel_chunks)}")
 
-            # Добавляем посты в общий список для CSV с ссылками
-            for msg in messages:
-                # Формируем ссылку на пост
-                post_url = f"https://t.me/{channel_name}/{msg['message_id']}"
+            for url in chunk:
+                channel_name = extract_channel_name(url)
+                try:
+                    messages = await get_last_day_messages(client, channel_name)
+                    results[channel_name] = [msg['text'] for msg in messages]
 
-                all_posts.append({
-                    'channel_url': f'https://t.me/{channel_name}',
-                    'post_text': msg['text'],
-                    'post_url': post_url,
-                    'post_date': msg['date'].strftime('%Y-%m-%d %H:%M:%S')
-                })
+                    for msg in messages:
+                        post_url = f"https://t.me/{channel_name}/{msg['message_id']}"
+                        all_posts.append({
+                            'channel_url': f'https://t.me/{channel_name}',
+                            'post_text': msg['text'],
+                            'post_url': post_url,
+                            'post_date': msg['date'].strftime('%Y-%m-%d %H:%M:%S')
+                        })
 
-            logger.info(f"Найдено {len(messages)} новых сообщений в канале {channel_name}")
-        except Exception as e:
-            logger.error(f"Ошибка при обработке канала {channel_name}: {e}")
-            results[channel_name] = []
+                    logger.info(f"Найдено {len(messages)} новых сообщений в канале {channel_name}")
+                except Exception as e:
+                    logger.error(f"Ошибка при обработке канала {channel_name}: {e}")
+                    results[channel_name] = []
+                    # Дополнительная задержка при ошибке
+                    await asyncio.sleep(random.uniform(5, 10))
 
-    # Сохранение результатов в CSV
-    if all_posts:
-        csv_filename = (BASE_DIR / 'data' / 'telegram_posts.csv')
-        posts_df = pd.DataFrame(all_posts)
-        posts_df.to_csv(csv_filename, index=False, encoding='utf-8-sig')
-        logger.info(f"Результаты сохранены в файл: {csv_filename}")
-    else:
-        logger.info("Нет новых постов для сохранения в CSV")
+        # Сохранение результатов в CSV
+        if all_posts:
+            csv_filename = (BASE_DIR / 'data' / 'telegram_posts.csv')
+            posts_df = pd.DataFrame(all_posts)
+            posts_df.to_csv(csv_filename, index=False, encoding='utf-8-sig')
+            logger.info(f"Результаты сохранены в файл: {csv_filename}")
+        else:
+            logger.info("Нет новых постов для сохранения в CSV")
 
-    # Закрытие клиента
-    await client.disconnect()
+    except Exception as e:
+        logger.error(f"Общая ошибка при выполнении скрипта: {e}")
+    finally:
+        # Корректное закрытие клиента
+        await client.disconnect()
+        logger.info("Клиент отключен")
 
     return results
 
