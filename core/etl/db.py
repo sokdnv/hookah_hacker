@@ -72,13 +72,15 @@ def get_brands_list(config, logger):
 
 def get_embeddings_by_brand(config, logger, brandname):
     query = f"""
-        SELECT DISTINCT "embedding", "Вкус итог" as flavor, "Описание короткое рус" as op_rus_short, 
-    "Описание длинное рус" as op_rus_long
+        SELECT DISTINCT ON ("Вкус итог") "embedding"::text as embedding,
+        "Вкус итог" as flavor, 
+        "Описание короткое рус" as op_rus_short, 
+        "Описание длинное рус" as op_rus_long
         FROM main
-        WHERE "Бренд итог" == "{brandname}"
+        WHERE "Бренд итог" = '{brandname}'
         """
 
     df = get_db_by_query(query, config, logger)
     df.fillna('', inplace=True)
-    df['full_shit'] = df['flavor_name'] + ' ' + df['op_rus_short'] + ' ' + df['op_rus_long']
+    df['full_shit'] = df['flavor'] + ' ' + df['op_rus_short'] + ' ' + df['op_rus_long']
     return df
