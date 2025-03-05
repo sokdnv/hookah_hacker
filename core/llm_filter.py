@@ -7,32 +7,12 @@ from tqdm.contrib.concurrent import thread_map
 from utils import logger, config, BASE_DIR
 from openai import OpenAI
 
+from core.prompts import SYSTEM_PROMPT_FIRST_CHECK
+
 USD_RUB_RATE = 85
 TOKEN_LIMIT = 1000
 OPENAI_BIG = "gpt-4o-2024-08-06"
 OPENAI_MINI = "gpt-4o-mini-2024-07-18"
-
-SYSTEM_PROMPT = """
-Ты - ИИ-ассистент для анализа сообщений о новинках табаков и бестабачных смесей для кальяна.
-Инструкции:
-
-Определи, содержит ли текст информацию о новинках:
-
-Новые табаки для кальяна (новые вкусы, линейки)
-Новые бестабачные смеси (чаи, паста, камни и т.д.)
-Лимитированные/сезонные выпуски табаков и смесей
-Анонсы будущих релизов табачной продукции
-Обновления существующих табаков (изменения вкуса, упаковки)
-
-Если содержит информацию о табачных/бестабачных новинках:
-Составь краткую выжимку (3-5 предложений)
-Выжимка должна содержать в себе все названия вышедших продуктов
-
-Если НЕ содержит информации о табачных/бестабачных новинках:
-Верни только "0" без комментариев
-
-Игнорируй информацию о кальянах, чашах, аксессуарах. Фокусируйся только на табаках и бестабачных смесях для кальяна.
-"""
 
 
 def evaluate_gpt_token_usage(chat_completion_usage: dict, model_version: str = 'gpt-4o-mini') -> float:
@@ -71,7 +51,7 @@ def evaluate_gpt_token_usage(chat_completion_usage: dict, model_version: str = '
     return price_rub
 
 
-def get_openai_answer(data: str, prompt=SYSTEM_PROMPT, temperature: float = 0,
+def get_openai_answer(data: str, prompt=SYSTEM_PROMPT_FIRST_CHECK, temperature: float = 0,
                       max_tokens: int = TOKEN_LIMIT, model: str = OPENAI_MINI) -> tuple[str, float]:
     """
     Функция для обращения к OPENAI по API и получения ответа.
@@ -102,7 +82,7 @@ def process_row(row):
             return '0', 0
 
         # Получаем ответ от OpenAI
-        answer, cost = get_openai_answer(data=row['post_text'], prompt=SYSTEM_PROMPT, model=OPENAI_BIG)
+        answer, cost = get_openai_answer(data=row['post_text'], prompt=SYSTEM_PROMPT_FIRST_CHECK, model=OPENAI_BIG)
 
         return answer, cost
 

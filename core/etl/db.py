@@ -34,16 +34,51 @@ def get_db_by_query(query, config, logger):
         return None
 
 
-def check_brand(brand_names: List[str], config, logger) -> List[bool]:
+def get_brands_and_flavors(config, logger):
     query = """
-    SELECT DISTINCT "Бренд итог" as brand_names
+    SELECT "УИН" as id, "Бренд итог" as brand_name, "Вкус итог" as flavor_name, "Описание короткое рус" as op_rus_short, 
+    "Описание длинное рус" as op_rus_long
     FROM main
     """
-
     df = get_db_by_query(query, config, logger)
 
-    brand_names_in_db = [brand.lower() for brand in df['brand_names'].tolist()]
+    tobacco_dict = {}
 
-    answer = [brand_name.lower() in brand_names_in_db for brand_name in brand_names]
+    for _, row in df.iterrows():
+        total_shit = []
+        brand = row['brand_name'].lower()
+        total_shit.append(row['flavor_name'])
+        total_shit.append(row['op_rus_short'] if row['op_rus_short'] else '')
+        total_shit.append(row['op_rus_long'] if row['op_rus_long'] else '')
 
-    return answer
+        total_shit = " ".join(total_shit).strip()
+
+        if brand not in tobacco_dict:
+            tobacco_dict[brand] = set()
+
+        tobacco_dict[brand].add(total_shit)
+
+    return tobacco_dict, df
+
+
+def get_brands_list(config, logger):
+    query = """
+        SELECT DISTINCT "Бренд итог" as brand_name
+        FROM main
+        """
+    df = get_db_by_query(query, config, logger)
+    return df['brand_name'].tolist()
+
+
+def get_embeddings_by_brand(config, logger, brandname):
+    query = f"""
+        SELECT DISTINCT "embedding", "Вкус итог" as flavor, "Описание короткое рус" as op_rus_short, 
+    "Описание длинное рус" as op_rus_long
+        FROM main
+        WHERE "Бренд итог" == "{brandname}"
+        """
+
+    df = get_db_by_query(query, config, logger)
+    df.fillna('', inplace=True)
+    df['full_shit'] = df['flavor_name'] + ' ' + df['op_rus_short'] + ' ' + df['op_rus_long']
+    return df
