@@ -1,6 +1,8 @@
 from sqlalchemy import create_engine, text
 import pandas as pd
 from typing import List
+from datetime import date
+import numpy as np
 
 
 def create_connector(config, logger):
@@ -80,7 +82,68 @@ def get_embeddings_by_brand(config, logger, brandname):
         WHERE "Бренд итог" = '{brandname}'
         """
 
-    df = get_db_by_query(query, config, logger)
-    df.fillna('', inplace=True)
-    df['full_shit'] = df['flavor'] + ' ' + df['op_rus_short'] + ' ' + df['op_rus_long']
-    return df
+    df_main = get_db_by_query(query, config, logger)
+    df_main.fillna('', inplace=True)
+    df_main['info'] = df_main['flavor'] + ' ' + df_main['op_rus_short'] + ' ' + df_main['op_rus_long']
+    df_main.drop(columns=['op_rus_short', 'op_rus_long'], inplace=True)
+    logger.info(f'Колонки {df_main.columns}')
+
+    query = f"""
+    SELECT embedding::text as embedding,
+    flavor,
+    info
+    FROM garbage
+    WHERE brand = '{brandname}'
+    """
+
+    df_garbage = get_db_by_query(query, config, logger)
+    df_garbage['info'] = df_garbage['flavor'] + ' ' + df_garbage['info']
+    logger.info(f'Колонки {df_garbage.columns}')
+
+    df_full = pd.concat([df_main, df_garbage], ignore_index=True)
+
+    return df_full
+
+
+def add_to_garbage_to_db(brand, flavor, info, embedding, config, logger):
+    try:
+        # Get the engine from the connector
+        engine = create_connector(config, logger)
+
+        # Get current date (without time)
+        current_date = date.today()
+
+        # Properly format embedding for pgvector
+        # Ensure embedding is flattened if it's a 2D array
+        if isinstance(embedding, np.ndarray):
+            embedding = embedding.flatten()
+
+        # Format as a PostgreSQL array string without any newlines or extra spaces
+        embedding_str = f"[{','.join(str(float(x)) for x in embedding)}]"
+
+        # Create a connection using the engine
+        with engine.connect() as conn:
+            # SQL query to insert data
+            query = text("""
+            INSERT INTO garbage (brand, flavor, info, timestamp, embedding)
+            VALUES (:brand, :flavor, :info, :timestamp, :embedding)
+            """)
+
+            # Execute the query with parameters
+            conn.execute(query, {
+                "brand": brand,
+                "flavor": flavor,
+                "info": info,
+                "timestamp": current_date,
+                "embedding": embedding_str
+            })
+
+            # Commit the transaction
+            conn.commit()
+
+        logger.info(f"Successfully added data for brand '{brand}'")
+        return True
+
+    except Exception as e:
+        logger.error(f"Error adding data to database: {e}")
+        return False

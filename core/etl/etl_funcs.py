@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import faiss
 
-from core.etl.db import get_brands_list, get_embeddings_by_brand
+from core.etl.db import get_brands_list, get_embeddings_by_brand, add_to_garbage_to_db
 from utils import config, logger
 from core.prompts import SYSTEM_PROMPT_BRAND_CHECK, SYSTEM_PROMPT_FLAVOR_CHECK
 from core.llm_filter import get_openai_answer, OPENAI_BIG
@@ -45,13 +45,12 @@ def get_k_neighbours(query, brand, k=5):
     embeddings = np.stack(embeddings_df['embedding'].values).astype('float32')
 
     # Создаем индекс FAISS для косинусного расстояния
-    dimension = embeddings.shape[1]  # 1024 в вашем случае
+    dimension = embeddings.shape[1]
 
     # Нормализуем векторы для косинусного сходства
     faiss.normalize_L2(embeddings)
 
-    # Создаем простой плоский индекс (оптимален для ~3500 векторов)
-    index = faiss.IndexFlatIP(dimension)  # IP = Inner Product для косинусного сходства
+    index = faiss.IndexFlatIP(dimension)
     index.add(embeddings)
 
     # Нормализуем вектор запроса
@@ -72,22 +71,30 @@ def get_k_neighbours(query, brand, k=5):
     return top_k_flavors_df
 
 
+def add_to_garbage(brand_name, flavor_name, additional_info):
+    query = flavor_name + " " + additional_info
+    embedding = model.encode(query, prompt_name="search_document").astype('float32')
+    embedding = embedding.reshape(1, -1)
+    add_to_garbage_to_db(brand=brand_name, flavor=flavor_name, info=additional_info,
+                         embedding=embedding, config=config, logger=logger)
+    logger.info(f'Табак {brand_name}: {flavor_name} добавлен в мусорку')
+
+
 def check_and_update(brand_name, flavor_name, additional_info):
     brands = get_brands_list(config=config, logger=logger)
     final_brand, _ = check_brand_with_gpt(brands, brand_name)
     if final_brand == 0:
-        # TODO запись в мусорку
-        logger.info('Ничего не нашлось')
-        pass
+        add_to_garbage(final_brand, flavor_name, additional_info)
+        logger.info('Такого бренда не нашлось')
 
     logger.info(f'Определился бренд {final_brand}')
 
-    query = flavor_name + additional_info
+    query = flavor_name + " " + additional_info
     candidates = get_k_neighbours(query=query, brand=final_brand)
 
-    llm_answer = check_flavors_with_gpt(candidates['full_shit'].tolist(), query)
+    llm_answer = check_flavors_with_gpt(candidates['info'].tolist(), query)
     if llm_answer[0] == "0":
         logger.info('Такой табак уже есть в базе')
     elif llm_answer[0] == "1":
         logger.info('Это новый табак, поздравляю!')
-    return llm_answer
+        add_to_garbage(final_brand, flavor_name, additional_info)
