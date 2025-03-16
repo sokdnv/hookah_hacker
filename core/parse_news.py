@@ -10,6 +10,8 @@ import asyncio
 import random
 import re
 import os
+import pytz
+import shutil
 
 
 from utils import config, logger, BASE_DIR
@@ -28,11 +30,9 @@ SESSION_PATHS = [
 ]
 
 
-# Функция для поиска существующего файла сессии
 def find_session_file():
     for path in SESSION_PATHS:
         if path.exists():
-            logger.info(f"Найден файл сессии: {path}")
             return path
     return None
 
@@ -49,26 +49,20 @@ def extract_channel_name(url):
     return url
 
 
-# Функция для получения последних сообщений канала с продвинутой задержкой
 async def get_last_day_messages(client, channel_name):
     try:
         channel = await client.get_entity(channel_name)
 
-        # Добавляем случайную задержку между запросами (более естественная)
-        delay = random.uniform(3, 7)  # Увеличенная задержка
+        delay = random.uniform(3, 7)
         await asyncio.sleep(delay)
 
-        # Определяем время один день назад
-        import pytz
         local_tz = pytz.timezone('UTC')
         now = datetime.now(local_tz)
         one_day_ago = now - timedelta(days=1)
 
-        # Получаем историю сообщений с ограниченной скоростью
         messages = []
         message_count = 0
-        async for message in client.iter_messages(channel, limit=100):  # Уменьшаем лимит до 100
-            # Добавляем микро-задержки после каждых 10 сообщений
+        async for message in client.iter_messages(channel, limit=100):
             message_count += 1
             if message_count % 10 == 0:
                 await asyncio.sleep(random.uniform(0.5, 1))
@@ -88,8 +82,6 @@ async def get_last_day_messages(client, channel_name):
         return messages
     except Exception as e:
         logger.error(f"Ошибка при получении сообщений канала {channel_name}: {e}")
-        # Дополнительная задержка при ошибке, чтобы избежать блокировки
-        await asyncio.sleep(random.uniform(10, 15))
         return []
 
 
@@ -120,7 +112,6 @@ async def main():
             os.makedirs(SESSION_FILE.parent, exist_ok=True)
 
             # Копируем файл сессии в целевую директорию
-            import shutil
             shutil.copy2(session_file, SESSION_FILE)
             logger.info(f"Копировали файл сессии из {session_file} в {SESSION_FILE}")
         except Exception as e:

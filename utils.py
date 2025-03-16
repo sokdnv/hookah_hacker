@@ -78,6 +78,9 @@ def setup_logging():
 
     return logger
 
+def clear_json(text: str):
+    return text.removeprefix('```json\n').rstrip('```')
+
 
 # Инициализация глобальных переменных
 logger = setup_logging()
