@@ -75,9 +75,8 @@ async def get_last_day_messages(client, channel_name):
 
             if message.date >= one_day_ago:
                 if message.text:
-                    preview = message.text[:100] + "..." if len(message.text) > 100 else message.text
                     message_data = {
-                        'text': preview,
+                        'text': message.text,
                         'message_id': message.id,
                         'channel_id': channel.id,
                         'date': message.date

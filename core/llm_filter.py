@@ -82,7 +82,7 @@ def process_row(row):
             return '0', 0
 
         # Получаем ответ от OpenAI
-        answer, cost = get_openai_answer(data=row['post_text'], prompt=SYSTEM_PROMPT_FIRST_CHECK, model=OPENAI_BIG)
+        answer, cost = get_openai_answer(data=row['post_text'], prompt=SYSTEM_PROMPT_FIRST_CHECK, model=OPENAI_MINI)
 
         return answer, cost
 
