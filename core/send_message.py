@@ -124,7 +124,7 @@ def notify_about_tobacco_news(filtered_df: pd.DataFrame, total_posts: int) -> No
         try:
             # Формируем текст новости с использованием HTML и номером новости
             news_message = f"<b>🔥 ТАБАЧНАЯ НОВОСТЬ #{i}/{len(filtered_df)}:</b>\n\n"
-            news_message += f"{row['llm_output']}\n\n"
+            news_message += f"{row['summary']}\n\n"
             news_message += f"<a href='{row['post_url']}'>👉 Читать полный пост</a>"
 
             # Отправляем сообщение с HTML-форматированием

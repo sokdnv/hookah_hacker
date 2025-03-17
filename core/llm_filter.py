@@ -9,42 +9,15 @@ from openai import OpenAI
 from functools import partial
 import json
 
-from core.prompts import SYSTEM_PROMPT_FIRST_CHECK, DEDUP_SYSTEM_PROMPT, PARSE_SYSTEM_PROMPT
+from core.prompts import SYSTEM_PROMPT_FIRST_CHECK, DEDUP_SYSTEM_PROMPT, PARSE_SYSTEM_PROMPT, SUMMARY_SYSTEM_PROMPT
 from utils import clear_json
-
-USD_RUB_RATE = 85
-TOKEN_LIMIT = 1000
-OPENAI_BIG = "gpt-4o-2024-08-06"
-OPENAI_MINI = "gpt-4o-mini-2024-07-18"
+from configs import *
 
 
 def evaluate_gpt_token_usage(chat_completion_usage: dict, model_version: str = 'gpt-4o-mini') -> float:
     """
     Функция для оценки стоимости генерации OPENAI.
     """
-
-    prices_dict = {
-        "gpt-3.5-turbo": {
-            'output_tokens': 0.0000015,
-            'prompt_tokens': 0.0000005
-        },
-        "gpt-4-turbo": {
-            'output_tokens': 0.00003,
-            'prompt_tokens': 0.00001
-        },
-        "gpt-4o": {
-            'output_tokens': 0.000015,
-            'prompt_tokens': 0.000005
-        },
-        "gpt-4o-2024-08-06": {
-            'output_tokens': 0.00001,
-            'prompt_tokens': 0.0000025
-        },
-        "gpt-4o-mini-2024-07-18": {
-            'output_tokens': 0.0000006,
-            'prompt_tokens': 0.00000015
-        },
-    }
 
     price_usd = round(chat_completion_usage.completion_tokens * prices_dict[model_version]['output_tokens']
                       + chat_completion_usage.prompt_tokens * prices_dict[model_version]['prompt_tokens'], 5)
@@ -75,6 +48,7 @@ def get_openai_answer(data: str, prompt=SYSTEM_PROMPT_FIRST_CHECK, temperature: 
     answer = chat_completion.choices[0].message.content
     price_rub = evaluate_gpt_token_usage(chat_completion_usage=chat_completion.usage,
                                          model_version=model)
+
     return answer, price_rub
 
 
@@ -83,9 +57,15 @@ def process_row(row, type: str = 'first_check'):
     if type == 'first_check':
         system_prompt = SYSTEM_PROMPT_FIRST_CHECK
         model = OPENAI_MINI
+        temperature = 0
     elif type == 'parse':
         system_prompt = PARSE_SYSTEM_PROMPT
         model = OPENAI_BIG
+        temperature = 0
+    elif type == 'summary':
+        system_prompt = SUMMARY_SYSTEM_PROMPT
+        model = OPENAI_BIG
+        temperature = 1
 
     try:
         # Проверяем, что текст поста существует
@@ -93,7 +73,8 @@ def process_row(row, type: str = 'first_check'):
             return '0', 0
 
         # Получаем ответ от OpenAI
-        answer, cost = get_openai_answer(data=row['post_text'], prompt=system_prompt, model=model)
+        answer, cost = get_openai_answer(data=row['post_text'], prompt=system_prompt,
+                                         model=model, temperature=temperature)
 
         return answer, cost
 
@@ -114,11 +95,13 @@ def process_dataframe(df: pd.DataFrame, max_workers: int = 8) -> pd.DataFrame:
     results = list(results)
 
     total_cost = 0
+
     for i, (result, cost) in enumerate(results):
+        result = int(result.strip('"'))
         df_copy.iloc[i, df_copy.columns.get_loc('llm_output')] = result
         total_cost += cost
 
-    filtered_df = df_copy[df_copy['llm_output'] != '0']
+    filtered_df = df_copy[df_copy['llm_output'] != 0]
     filtered_df = filtered_df.drop(columns=['llm_output'])
 
     logger.info(f"Обработка завершена. Всего строк: {len(df_copy)}, отфильтровано: {len(filtered_df)}")
@@ -130,12 +113,6 @@ def process_dataframe(df: pd.DataFrame, max_workers: int = 8) -> pd.DataFrame:
 def deduplicate_tobacco_news(filtered_df: pd.DataFrame) -> pd.DataFrame:
     """
     Удаление дубликатов новостных статей с использованием одного вызова LLM.
-
-    Аргументы:
-        filtered_df (pd.DataFrame): DataFrame с новостными статьями для удаления дубликатов
-
-    Возвращает:
-        pd.DataFrame: DataFrame без дубликатов с наиболее информативными статьями
     """
     # Если 0 или 1 статья, дедупликация не требуется
     if len(filtered_df) <= 1:
@@ -178,7 +155,7 @@ def deduplicate_tobacco_news(filtered_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def parse_info(df: pd.DataFrame, max_workers: int = 8) -> pd.DataFrame:
-    """Парсим информацию из текста с помощью llm"""
+    """Парсим информацию из текста с помощью llm и создаем новый датафрейм с отдельной строкой для каждого табака"""
     logger.info(f"Начало процесса парсинга информации для {len(df)} новостных статей...")
     df_copy = df.copy()
     df_copy['llm_output'] = ''
@@ -197,35 +174,65 @@ def parse_info(df: pd.DataFrame, max_workers: int = 8) -> pd.DataFrame:
         result = clear_json(result)
         df_copy.iloc[i, df_copy.columns.get_loc('llm_output')] = result
 
-    # Извлекаем поля из JSON в отдельные колонки
-    logger.info("Извлечение полей из JSON-результатов...")
+    # Создаем новый датафрейм только с нужными колонками
+    logger.info("Создание нового датафрейма с результатами...")
 
-    # Инициализируем новые колонки
-    df_copy['brand'] = None
-    df_copy['flavor'] = None
-    df_copy['info'] = None
-    df_copy['summary'] = None
+    # Список для хранения данных нового датафрейма
+    new_data = []
 
-    # Парсим JSON-результаты и заполняем колонки
+    # Парсим JSON-результаты и создаем записи для нового датафрейма
     for idx, row in df_copy.iterrows():
         try:
             if row['llm_output'] and isinstance(row['llm_output'], str):
                 json_data = json.loads(row['llm_output'])
-                df_copy.at[idx, 'brand'] = json_data.get('brand')
-                df_copy.at[idx, 'flavor'] = json_data.get('flavor')
-                df_copy.at[idx, 'info'] = json_data.get('info')
-                df_copy.at[idx, 'summary'] = json_data.get('summary')
+
+                # Если результат - список объектов (несколько табаков)
+                if isinstance(json_data, list):
+                    for tobacco in json_data:
+                        new_data.append({
+                            'post_url': row['post_url'],
+                            'brand': tobacco.get('brand') if tobacco.get('brand') != 0 else pd.NA,
+                            'flavor': tobacco.get('flavor') if tobacco.get('flavor') != 0 else pd.NA,
+                            'info': tobacco.get('info') if tobacco.get('info') != 0 else pd.NA
+                        })
+                # Если результат - один объект (один табак)
+                else:
+                    new_data.append({
+                        'post_url': row['post_url'],
+                        'brand': json_data.get('brand') if json_data.get('brand') != 0 else pd.NA,
+                        'flavor': json_data.get('flavor') if json_data.get('flavor') != 0 else pd.NA,
+                        'info': json_data.get('info') if json_data.get('info') != 0 else pd.NA
+                    })
         except json.JSONDecodeError:
             logger.warning(f"Не удалось распарсить JSON для записи {idx}. Значение: {row['llm_output']}")
         except Exception as e:
-            logger.error(f"Ошибка при обработке записи {idx}: {str(e)}")
+            logger.error(f"Ошибка при обработке записи {idx}: {str(e)}, строка {row['llm_output']}")
 
-    # Преобразуем числовые значения 0 в pandas NA для строковых колонок
-    for col in ['brand', 'flavor', 'info', 'summary']:
-        df_copy[col] = df_copy[col].apply(lambda x: pd.NA if x == 0 else x)
+    # Создаем новый датафрейм только с нужными колонками
+    result_df = pd.DataFrame(new_data, columns=['post_url', 'brand', 'flavor', 'info'])
 
-    logger.info(
-        f"Процесс парсинга завершен.")
+    logger.info(f"Процесс парсинга завершен. Создано {len(result_df)} записей из {len(df)} исходных статей.")
+
+    return result_df
+
+
+def add_summary(df: pd.DataFrame, max_workers: int = 8) -> pd.DataFrame:
+    """Добавляем краткое саммари к каждому посту"""
+    logger.info(f"Начало процесса саммаризации информации для {len(df)} новостных статей...")
+    df_copy = df.copy()
+    df_copy['summary'] = ''
+
+    process_row_with_summary = partial(process_row, type="summary")
+
+    # Используем thread_map для корректной работы с tqdm
+    results = thread_map(process_row_with_summary, [row for _, row in df_copy.iterrows()],
+                         max_workers=max_workers,
+                         desc="Обработка записей")
+
+    results = list(results)
+
+    for i, (result, _) in enumerate(results):
+        df_copy.iloc[i, df_copy.columns.get_loc('summary')] = result
 
     return df_copy
 
@@ -257,21 +264,25 @@ def main():
         unique_df = filtered_df
         logger.info("Шаг 2: Дедупликация не требуется (найдено менее 2 новостей)")
 
-    # Сохраняем результаты после дедупликации
-    output_path = (BASE_DIR / 'data' / 'posts_filtered.csv')
-    unique_df.to_csv(output_path, index=False, encoding='utf-8-sig')
-    logger.info(f"Результаты после дедубликации сохранены в файл: {output_path}")
     logger.info(f"Итого найдено {len(unique_df)} уникальных табачных новостей из {len(df)} проверенных сообщений")
 
     # Шаг 3. Парсинг информации из датафрейма
     logger.info("Шаг 3: Парсинг информации из новостей...")
     parsed_df = parse_info(unique_df)
 
-    # Сохраняем финальные результаты
-    output_path = (BASE_DIR / 'data' / 'posts_final.csv')
-    parsed_df.to_csv(output_path, index=False, encoding='utf-8-sig')
-    logger.info(f"Финальные результаты сохранены в файл: {output_path}")
+    # Шаг 4. Пишем саммари
+    logger.info("Шаг 4: Дописываем саммари...")
+    final_df = add_summary(unique_df)
 
+    # Сохраняем финальные результаты по вкусам
+    output_path = (BASE_DIR / 'data' / 'new_flavors.csv')
+    parsed_df.to_csv(output_path, index=False, encoding='utf-8-sig')
+    logger.info(f"Финальные результаты по вкусам сохранены в файл: {output_path}")
+
+    # Сохраняем результаты по постам
+    output_path = (BASE_DIR / 'data' / 'posts_filtered.csv')
+    final_df.to_csv(output_path, index=False, encoding='utf-8-sig')
+    logger.info(f"Финальные результаты по постам сохранены в файл: {output_path}")
 
 if __name__ == "__main__":
     main()
