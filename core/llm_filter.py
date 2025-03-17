@@ -9,7 +9,8 @@ from openai import OpenAI
 from functools import partial
 import json
 
-from core.prompts import SYSTEM_PROMPT_FIRST_CHECK, DEDUP_SYSTEM_PROMPT, PARSE_SYSTEM_PROMPT, SUMMARY_SYSTEM_PROMPT
+from core.prompts import SYSTEM_PROMPT_FIRST_CHECK, DEDUP_SYSTEM_PROMPT, PARSE_SYSTEM_PROMPT, SUMMARY_SYSTEM_PROMPT, \
+    SYSTEM_PROMPT_SECOND_CHECK
 from utils import clear_json
 from configs import *
 
@@ -66,6 +67,10 @@ def process_row(row, type: str = 'first_check'):
         system_prompt = SUMMARY_SYSTEM_PROMPT
         model = OPENAI_BIG
         temperature = 1
+    elif type == 'second_check':
+        system_prompt = SYSTEM_PROMPT_SECOND_CHECK
+        model = OPENAI_BIG
+        temperature = 0
 
     try:
         # Проверяем, что текст поста существует
@@ -90,7 +95,7 @@ def process_dataframe(df: pd.DataFrame, max_workers: int = 8) -> pd.DataFrame:
     # Используем thread_map для корректной работы с tqdm
     results = thread_map(process_row, [row for _, row in df_copy.iterrows()],
                          max_workers=max_workers,
-                         desc="Обработка записей")
+                         desc="Обработка 1 уровня")
 
     results = list(results)
 
@@ -102,12 +107,27 @@ def process_dataframe(df: pd.DataFrame, max_workers: int = 8) -> pd.DataFrame:
         total_cost += cost
 
     filtered_df = df_copy[df_copy['llm_output'] != 0]
-    filtered_df = filtered_df.drop(columns=['llm_output'])
 
-    logger.info(f"Обработка завершена. Всего строк: {len(df_copy)}, отфильтровано: {len(filtered_df)}")
+    logger.info(f"Обработка 1 уровня завершена. Всего строк: {len(df_copy)}, отфильтровано: {len(filtered_df)}")
+
+    process_row_second= partial(process_row, type="second_check")
+    results = thread_map(process_row_second, [row for _, row in filtered_df.iterrows()],
+                         max_workers=max_workers,
+                         desc="Обработка 2 уровня")
+
+    results = list(results)
+
+    for i, (result, cost) in enumerate(results):
+        result = int(result.strip('"'))
+        filtered_df.iloc[i, filtered_df.columns.get_loc('llm_output')] = result
+        total_cost += cost
+
+    filtered_df_2 = filtered_df[filtered_df['llm_output'] != 0]
+
+    logger.info(f"Обработка 2 уровня завершена. Всего строк: {len(filtered_df)}, отфильтровано: {len(filtered_df_2)}")
     logger.info(f"Общая стоимость запросов: {total_cost:.2f} рублей")
 
-    return filtered_df
+    return filtered_df_2
 
 
 def deduplicate_tobacco_news(filtered_df: pd.DataFrame) -> pd.DataFrame:
